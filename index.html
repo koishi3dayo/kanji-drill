@@ -404,6 +404,30 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   border-radius: 20px; margin-bottom: 12px;
 }
 
+/* ── バッジコレクション ── */
+.badge-count {
+  font-size: 14px; font-weight: bold; color: var(--primary);
+  margin-bottom: 10px;
+}
+.badge-cat {
+  font-size: 12px; font-weight: bold; color: var(--text-light);
+  margin: 12px 0 6px;
+}
+.badge-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 8px;
+}
+.badge-cell {
+  border-radius: 10px; padding: 8px 4px; text-align: center;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.badge-cell.got { background: #fff8e1; border-color: var(--accent); }
+.badge-cell.locked { opacity: .55; filter: grayscale(1); }
+.badge-icon { font-size: 26px; line-height: 1.2; }
+.badge-name { font-size: 10px; font-weight: bold; margin-top: 2px; }
+.badge-need { font-size: 9px; color: var(--text-light); margin-top: 1px; }
+.badge-cell.got .badge-need { color: var(--success); font-weight: bold; }
+
 /* ── テストの見返し ── */
 .review-item-btn {
   display: flex; align-items: center; justify-content: space-between;
@@ -477,7 +501,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
     </div>
     <div class="card">
       <div class="card-title">🏆 バッジ</div>
-      <div id="badges" style="font-size:24px;letter-spacing:4px;min-height:36px"></div>
+      <div id="badges"></div>
     </div>
     <div class="card" id="review-card" style="display:none">
       <div class="card-title">📖 テストの見返し</div>
@@ -728,8 +752,53 @@ const Store = {
       if (s) { total += s.questions.length; correct += s.score; }
     }
     return { total, correct };
+  },
+
+  // ── バッジ算出用の集計（すべてアクティブなプロフィールの履歴から計算）──
+  // テストを実施した「日数」の累計
+  getSessionCount() {
+    return Object.keys(this.load().history).length;
+  },
+  // 週3回以上できた「週」の数（週は月曜はじまり）
+  getConsistentWeekCount() {
+    const dates = Object.keys(this.load().history);
+    const weekMap = {};
+    dates.forEach(ds => {
+      const key = weekKey(ds);
+      weekMap[key] = (weekMap[key] || 0) + 1;
+    });
+    return Object.values(weekMap).filter(c => c >= 3).length;
+  },
+  // 初回実施日からの経過日数（履歴がなければ0）
+  getDaysSinceFirst() {
+    const dates = Object.keys(this.load().history).sort();
+    if (!dates.length) return 0;
+    const first = new Date(dates[0] + 'T00:00:00');
+    const today = new Date(this.today() + 'T00:00:00');
+    return Math.floor((today - first) / 86400000);
+  },
+  // これまでに経験した「主に出題された学年」の種類数
+  getGradesExperienced() {
+    const hist = this.load().history;
+    const grades = new Set();
+    Object.values(hist).forEach(sess => {
+      const cnt = {};
+      (sess.questions || []).forEach(q => { if (q.grade) cnt[q.grade] = (cnt[q.grade] || 0) + 1; });
+      let main = null, max = -1;
+      Object.entries(cnt).forEach(([g, c]) => { if (c > max) { max = c; main = g; } });
+      if (main) grades.add(main);
+    });
+    return grades.size;
   }
 };
+
+// 日付文字列(YYYY-MM-DD)を、その週の月曜日をキーにして返す
+function weekKey(ds) {
+  const d = new Date(ds + 'T00:00:00');
+  const dow = (d.getDay() + 6) % 7;   // 月曜=0, 日曜=6
+  d.setDate(d.getDate() - dow);
+  return d.toISOString().slice(0, 10);
+}
 
 // ─────────────────────────────────────────
 // クイズエンジン
@@ -853,6 +922,54 @@ function shuffle(arr) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+// ─────────────────────────────────────────
+// バッジ定義（カテゴリごと・条件は met(ctx) で判定）
+//   ctx = { streak, sessions, weeks, days, grades }
+// ─────────────────────────────────────────
+const BADGES = [
+  // A. 連続日数
+  { cat: '連続日数', icon: '🔥', name: 'れんぞく3日', need: '3日連続', met: c => c.streak >= 3 },
+  { cat: '連続日数', icon: '⚡', name: 'れんぞく7日', need: '7日連続', met: c => c.streak >= 7 },
+  { cat: '連続日数', icon: '🥇', name: 'れんぞく30日', need: '30日連続', met: c => c.streak >= 30 },
+  { cat: '連続日数', icon: '👑', name: 'れんぞく100日', need: '100日連続', met: c => c.streak >= 100 },
+  // B. がんばった回数（累計実施回数）
+  { cat: 'がんばった回数', icon: '🌱', name: 'はじめの一歩', need: '1回', met: c => c.sessions >= 1 },
+  { cat: 'がんばった回数', icon: '🌿', name: '5回', need: '5回', met: c => c.sessions >= 5 },
+  { cat: 'がんばった回数', icon: '🍀', name: '10回', need: '10回', met: c => c.sessions >= 10 },
+  { cat: 'がんばった回数', icon: '🌸', name: '15回', need: '15回', met: c => c.sessions >= 15 },
+  { cat: 'がんばった回数', icon: '🌻', name: '20回', need: '20回', met: c => c.sessions >= 20 },
+  { cat: 'がんばった回数', icon: '⭐', name: '30回', need: '30回', met: c => c.sessions >= 30 },
+  { cat: 'がんばった回数', icon: '🌟', name: '50回', need: '50回', met: c => c.sessions >= 50 },
+  { cat: 'がんばった回数', icon: '💯', name: '100回', need: '100回', met: c => c.sessions >= 100 },
+  { cat: 'がんばった回数', icon: '🏆', name: '200回', need: '200回', met: c => c.sessions >= 200 },
+  { cat: 'がんばった回数', icon: '🎖️', name: '365回', need: '365回', met: c => c.sessions >= 365 },
+  // C. 週の習慣（週3回以上の週）
+  { cat: '週の習慣', icon: '📅', name: 'はじめての習慣週', need: '週3回を1週', met: c => c.weeks >= 1 },
+  { cat: '週の習慣', icon: '📗', name: '習慣4週', need: '4週', met: c => c.weeks >= 4 },
+  { cat: '週の習慣', icon: '📘', name: '習慣12週', need: '12週', met: c => c.weeks >= 12 },
+  { cat: '週の習慣', icon: '📙', name: '習慣26週', need: '26週', met: c => c.weeks >= 26 },
+  { cat: '週の習慣', icon: '📚', name: '習慣52週', need: '52週', met: c => c.weeks >= 52 },
+  // D. 長く続けた証（長期継続＝経過期間＋実施回数）
+  { cat: '長くつづけた', icon: '🗓️', name: '1ヶ月つづけた', need: '30日＋10回', met: c => c.days >= 30 && c.sessions >= 10 },
+  { cat: '長くつづけた', icon: '🌗', name: '3ヶ月つづけた', need: '90日＋30回', met: c => c.days >= 90 && c.sessions >= 30 },
+  { cat: '長くつづけた', icon: '🌙', name: '半年つづけた', need: '180日＋60回', met: c => c.days >= 180 && c.sessions >= 60 },
+  { cat: '長くつづけた', icon: '🎊', name: '1年つづけた', need: '365日＋120回', met: c => c.days >= 365 && c.sessions >= 120 },
+  // E. 複数学年チャレンジ
+  { cat: '学年チャレンジ', icon: '🧩', name: '2学年', need: '2学年を経験', met: c => c.grades >= 2 },
+  { cat: '学年チャレンジ', icon: '🎨', name: '3学年', need: '3学年を経験', met: c => c.grades >= 3 },
+  { cat: '学年チャレンジ', icon: '🏅', name: '全学年', need: '2〜5年すべて', met: c => c.grades >= 4 }
+];
+
+function badgeContext() {
+  return {
+    streak: Store.getStreak(),
+    sessions: Store.getSessionCount(),
+    weeks: Store.getConsistentWeekCount(),
+    days: Store.getDaysSinceFirst(),
+    grades: Store.getGradesExperienced()
+  };
 }
 
 // ─────────────────────────────────────────
@@ -1035,6 +1152,28 @@ const App = {
     this.renderHome();
   },
 
+  // バッジコレクションを描画（獲得＝色付き／未獲得＝グレー＋条件）
+  renderBadges() {
+    const ctx = badgeContext();
+    const earned = BADGES.filter(b => b.met(ctx)).length;
+    // カテゴリ順を保ちつつグループ化
+    const cats = [];
+    BADGES.forEach(b => { if (!cats.includes(b.cat)) cats.push(b.cat); });
+    const html = cats.map(cat => {
+      const items = BADGES.filter(b => b.cat === cat).map(b => {
+        const got = b.met(ctx);
+        return `<div class="badge-cell ${got ? 'got' : 'locked'}" title="${b.name}：${b.need}">
+          <div class="badge-icon">${b.icon}</div>
+          <div class="badge-name">${b.name}</div>
+          <div class="badge-need">${got ? 'ゲット！' : b.need}</div>
+        </div>`;
+      }).join('');
+      return `<div class="badge-cat">${cat}</div><div class="badge-grid">${items}</div>`;
+    }).join('');
+    document.getElementById('badges').innerHTML =
+      `<div class="badge-count">🏅 ${earned} / ${BADGES.length} こ ゲット</div>${html}`;
+  },
+
   renderHome() {
     this.renderProfileControls();
     document.getElementById('streak-num').textContent = Store.getStreak();
@@ -1043,17 +1182,8 @@ const App = {
     document.getElementById('stat-correct').textContent = ws.correct;
     document.getElementById('stat-rate').textContent = ws.total ? Math.round(ws.correct / ws.total * 100) + '%' : '-';
 
-    const streak = Store.getStreak();
-    const badges = [];
-    if (streak >= 3) badges.push('🥉');
-    if (streak >= 7) badges.push('🥈');
-    if (streak >= 30) badges.push('🥇');
-    if (streak >= 100) badges.push('🏆');
+    this.renderBadges();
     const d = Store.load();
-    const totalAnswered = Object.values(d.stats).reduce((s, v) => s + v.tested, 0);
-    if (totalAnswered >= 50) badges.push('⭐');
-    if (totalAnswered >= 200) badges.push('🌟');
-    document.getElementById('badges').textContent = badges.join(' ') || '（まだバッジなし）';
 
     const sess = Store.getTodaySession();
     const statusEl = document.getElementById('today-status');
