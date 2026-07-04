@@ -404,6 +404,23 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   border-radius: 20px; margin-bottom: 12px;
 }
 
+/* ── テストの見返し ── */
+.review-item-btn {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; padding: 12px 14px; margin-bottom: 8px;
+  border: 2px solid var(--border); border-radius: 12px; background: var(--bg);
+  cursor: pointer; font-size: 14px; text-align: left; min-height: 48px;
+}
+.review-item-btn:last-child { margin-bottom: 0; }
+.review-item-date { font-weight: bold; }
+.review-item-score { color: var(--primary); font-weight: bold; }
+.review-q-item { padding: 14px 16px; }
+.review-q-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.review-mark { font-size: 20px; margin-left: auto; }
+.review-sentence { font-size: 18px; font-weight: bold; background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.review-q-item.wrong .review-sentence { background: #fff5f5; }
+.review-q-item.correct .review-sentence { background: #f0fff4; }
+
 /* ── タッチ操作: 最小タップ領域の確保 ── */
 .cal-nav-btn { width: 44px; height: 44px; }
 .grade-tab { min-height: 40px; }
@@ -462,6 +479,10 @@ h2 { font-size: 18px; margin-bottom: 14px; }
       <div class="card-title">🏆 バッジ</div>
       <div id="badges" style="font-size:24px;letter-spacing:4px;min-height:36px"></div>
     </div>
+    <div class="card" id="review-card" style="display:none">
+      <div class="card-title">📖 テストの見返し</div>
+      <div id="review-recent-list"></div>
+    </div>
   </div>
 
   <!-- テスト -->
@@ -487,8 +508,21 @@ h2 { font-size: 18px; margin-bottom: 14px; }
       <div class="card-title">❌ まちがえた問題</div>
       <ul class="wrong-list" id="wrong-list"></ul>
     </div>
+    <button class="btn btn-outline" id="btn-review-result" style="margin-bottom:10px">📖 この回を見返す</button>
     <button class="btn btn-primary" onclick="App.navigate('home')" style="margin-bottom:10px">🏠 ホームにもどる</button>
     <button class="btn btn-outline" onclick="App.navigate('map')" style="margin-bottom:10px">📊 しんちょくをみる</button>
+  </div>
+
+  <!-- テスト見返し -->
+  <div id="screen-review" class="screen">
+    <h2>📖 テストの見返し</h2>
+    <div class="profile-badge" id="review-profile-badge"></div>
+    <div class="card" style="text-align:center;margin-bottom:14px">
+      <div class="score-sub" id="review-date"></div>
+      <div class="score-num" id="review-score" style="color:var(--primary)"></div>
+    </div>
+    <div id="review-list"></div>
+    <button class="btn btn-primary" id="btn-review-back" style="margin-bottom:10px">🏠 もどる</button>
   </div>
 
   <!-- ヒートマップ -->
@@ -931,7 +965,8 @@ const App = {
   finishQuiz() {
     if (this.answers.some(a => a === null)) return;
     this.questions.forEach((q, i) => Store.recordAnswer(q.key, this.answers[i]));
-    Store.saveSession(Store.today(), this.questions, this.answers);
+    this.lastSessionDate = Store.today();
+    Store.saveSession(this.lastSessionDate, this.questions, this.answers);
     this.renderResult();
     this.navigate('result');
     window.scrollTo(0, 0);
@@ -964,6 +999,7 @@ const App = {
       `).join('');
     }
     document.getElementById('nav-result') && document.getElementById('nav-result').classList.add('active');
+    document.getElementById('btn-review-result').onclick = () => this.openReview(this.lastSessionDate, 'home');
   },
 
   // プロフィール切り替え・学年選択タブを描画
@@ -1034,6 +1070,22 @@ const App = {
           📝 今日の10問をはじめる
         </button>
       `;
+    }
+
+    // 直近2回分のテスト見返しカード
+    const recentDates = Object.keys(d.history).sort().reverse().slice(0, 2);
+    const reviewCard = document.getElementById('review-card');
+    if (recentDates.length === 0) {
+      reviewCard.style.display = 'none';
+    } else {
+      reviewCard.style.display = '';
+      document.getElementById('review-recent-list').innerHTML = recentDates.map(dt => {
+        const s = d.history[dt];
+        return `<button class="review-item-btn" onclick="App.openReview('${dt}','home')">
+          <span class="review-item-date">${dt}</span>
+          <span class="review-item-score">${s.score}/${s.questions.length}問正解</span>
+        </button>`;
+      }).join('');
     }
   },
 
@@ -1144,8 +1196,48 @@ const App = {
       <div class="cal-detail-box">
         <div class="cal-detail-date">${dateStr}</div>
         <div class="cal-detail-score">${sess.score} / ${sess.questions.length} 問正解</div>
+        <button class="btn btn-outline" style="margin-top:10px" onclick="App.openReview('${dateStr}','calendar')">📖 この日の問題を見返す</button>
       </div>
     `;
+  },
+
+  // ── テストの見返し ──
+  reviewReturnTo: 'home',
+
+  openReview(dateStr, fromScreen) {
+    this.reviewReturnTo = fromScreen || 'home';
+    this.renderReview(dateStr);
+    this.navigate('review');
+  },
+
+  renderReview(dateStr) {
+    const d = Store.load();
+    const sess = d.history[dateStr];
+    document.getElementById('review-profile-badge').textContent = `👦 ${Store.getName()}の記録`;
+    document.getElementById('btn-review-back').onclick = () => this.navigate(this.reviewReturnTo);
+
+    if (!sess) {
+      document.getElementById('review-date').textContent = dateStr;
+      document.getElementById('review-score').textContent = '';
+      document.getElementById('review-list').innerHTML = '<div class="empty-state">この日の記録はありません</div>';
+      return;
+    }
+    document.getElementById('review-date').textContent = `${dateStr} のテスト`;
+    document.getElementById('review-score').textContent = `${sess.score} / ${sess.questions.length} 問正解`;
+
+    document.getElementById('review-list').innerHTML = sess.questions.map((q, i) => {
+      const ok = !!sess.answers[i];
+      return `
+        <div class="card review-q-item ${ok ? 'correct' : 'wrong'}">
+          <div class="review-q-top">
+            <span class="gnum">${i + 1}</span>
+            <span class="quiz-type-badge ${q.typeCls}">${q.type}問題</span>
+            <span class="review-mark">${ok ? '⭕' : '❌'}</span>
+          </div>
+          <div class="review-sentence">${fmtAnswer(q)}</div>
+        </div>
+      `;
+    }).join('');
   }
 };
 

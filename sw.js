@@ -1,6 +1,6 @@
 // 漢字ドリル Service Worker（オフライン起動用）
 // キャッシュのバージョン。アプリ更新時はこの数字を上げると自動で新版に切り替わる。
-const CACHE = 'kanji-drill-v2';
+const CACHE = 'kanji-drill-v3';
 
 const ASSETS = [
   './',
