@@ -295,6 +295,8 @@ button, .nav-btn, .heat-cell, .kl-cell, .cal-cell, .grade-tab { touch-action: ma
 .grade3-bg { background: #f0ebff; }
 .grade4-bg { background: #ffeef5; }
 .grade5-bg { background: #fffff0; }
+.gradeJ-bg { background: #eaf6ec; }
+.list-note { font-size: 11px; color: var(--text-light); margin-bottom: 10px; line-height: 1.5; }
 
 /* ── モーダル ── */
 .modal-overlay {
@@ -451,6 +453,10 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 .modal-close { min-height: 44px; }
 .gbtn { min-height: 48px; }
 
+/* ── 出題数・順序の設定行 ── */
+.setting-row { display: flex; gap: 12px; margin-top: 12px; }
+.setting-row > div { flex: 1; }
+
 /* ── 狭い画面（スマホ）向け調整 ── */
 @media (max-width: 380px) {
   .screen { padding-left: 12px; padding-right: 12px; }
@@ -482,10 +488,20 @@ h2 { font-size: 18px; margin-bottom: 14px; }
       <div class="profile-tabs" id="profile-tabs"></div>
       <div class="card-title" style="margin-top:12px">🎒 学年（がくねん）をえらぶ</div>
       <div class="grade-tabs" id="home-grade-tabs"></div>
+      <div class="setting-row">
+        <div>
+          <div class="card-title">📝 もんだいの数</div>
+          <div class="grade-tabs" id="home-qcount-tabs"></div>
+        </div>
+        <div>
+          <div class="card-title">🔀 じゅんばん</div>
+          <div class="grade-tabs" id="home-order-tabs"></div>
+        </div>
+      </div>
     </div>
     <div class="home-header">
       <h1>✏️ 漢字ドリル</h1>
-      <div class="subtitle" id="home-subtitle">毎日10問で漢字マスター！</div>
+      <div class="subtitle" id="home-subtitle">毎日コツコツ漢字マスター！</div>
       <div class="streak-box">
         🔥 <span class="streak-num" id="streak-num">0</span> 日連続！
       </div>
@@ -523,7 +539,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
     <div class="result-score">
       <div class="score-circle pop">
         <div class="score-num" id="res-score">0</div>
-        <div class="score-den">/ 10</div>
+        <div class="score-den" id="res-den">/ 10</div>
       </div>
       <div class="score-msg" id="res-msg"></div>
       <div class="score-sub" id="res-sub"></div>
@@ -617,9 +633,15 @@ h2 { font-size: 18px; margin-bottom: 14px; }
   </div>
 </div>
 
-<script src="kanji-data.js?v=3"></script>
-<script src="sentence-data.js?v=3"></script>
+<script src="kanji-data.js?v=4"></script>
+<script src="sentence-data.js?v=4"></script>
 <script>
+// 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
+const GRADE_ORDER = ['2', '3', '4', '5', '6', 'J1', 'J2', 'J3'];
+// 学年コード → 表示ラベル
+const GRADE_LABEL = { '2': '2年', '3': '3年', '4': '4年', '5': '5年', '6': '6年', 'J1': '中1', 'J2': '中2', 'J3': '中3' };
+function gradeLabel(g) { return GRADE_LABEL[g] || (g + '年'); }
+
 // ─────────────────────────────────────────
 // ストレージ
 // ─────────────────────────────────────────
@@ -628,7 +650,7 @@ const Store = {
 
   // プロフィール1件分の空データ
   emptyProfile(name, grade) {
-    return { name, grade, history: {}, stats: {}, streak: { current: 0, last: '' } };
+    return { name, grade, qCount: 10, orderMode: 'random', history: {}, stats: {}, streak: { current: 0, last: '' } };
   },
 
   // ルート構造（activeProfile ＋ 3人分のprofiles）の初期値
@@ -650,11 +672,15 @@ const Store = {
     catch { raw = null; }
     if (!raw) return this.defaultRoot();
 
-    // 新形式（プロフィールあり）ならそのまま（欠けたプロフィールは補完）
+    // 新形式（プロフィールあり）ならそのまま（欠けたプロフィール・設定は補完）
     if (raw.profiles && raw.activeProfile) {
       const def = this.defaultRoot();
       ['1', '2', '3'].forEach(id => {
         if (!raw.profiles[id]) raw.profiles[id] = def.profiles[id];
+        else {
+          if (raw.profiles[id].qCount == null) raw.profiles[id].qCount = 10;
+          if (raw.profiles[id].orderMode == null) raw.profiles[id].orderMode = 'random';
+        }
       });
       return raw;
     }
@@ -702,6 +728,12 @@ const Store = {
     p.grade = grade;
     this.save(p);
   },
+  // 出題数（未設定は10問）
+  getQCount() { return this.load().qCount || 10; },
+  setQCount(n) { const p = this.load(); p.qCount = n; this.save(p); },
+  // 出題順序（未設定はランダム）
+  getOrderMode() { return this.load().orderMode || 'random'; },
+  setOrderMode(m) { const p = this.load(); p.orderMode = m; this.save(p); },
   getName(id) {
     const root = this.loadRoot();
     return (root.profiles[id || root.activeProfile] || {}).name || '';
@@ -830,20 +862,21 @@ const Quiz = {
     return arr;
   },
 
-  TOTAL: 10,
-
-  // アクティブなプロフィールの学年に応じた出題枠を返す
-  //  2年生 → 主学年10:下学年0／3〜5年生 → 主学年9:下学年（一つ下）1
-  slotPlan(grade) {
-    if (grade === '2') return { main: '2', below: null, mainSlots: 10, belowSlots: 0 };
-    const below = String(Number(grade) - 1);   // 3→2, 4→3, 5→4
-    return { main: grade, below, mainSlots: 9, belowSlots: 1 };
+  // アクティブなプロフィールの学年・出題数に応じた出題枠を返す
+  //  一番下の学年（2年）→ 全問主学年／それ以外 → 主学年9割:一つ下1割（総数に比例）
+  slotPlan(grade, total) {
+    const idx = GRADE_ORDER.indexOf(grade);
+    if (idx <= 0) return { main: grade, below: null, mainSlots: total, belowSlots: 0 };
+    const below = GRADE_ORDER[idx - 1];         // 配列上の1つ前の学年
+    const belowSlots = Math.round(total / 10);  // 10問→1, 20問→2
+    return { main: grade, below, mainSlots: total - belowSlots, belowSlots };
   },
 
-  // 今日の10問を選ぶ（プロフィールの学年に応じた重み付け）
+  // 今日の問題を選ぶ（プロフィールの学年・出題数・出題順序に応じる）
   selectDaily() {
     const grade = Store.getGrade();
-    const plan = this.slotPlan(grade);
+    const total = Store.getQCount();
+    const plan = this.slotPlan(grade, total);
     const all = this.getAll();
     const usedKeys = new Set();
 
@@ -886,13 +919,20 @@ const Quiz = {
     fillFrom(plan.main, mainSlots, plan.mainSlots);
     fillFrom(plan.below, belowSlots, plan.belowSlots);
 
-    // 「一つ下」に十分な在庫がない等で10問に満たない場合は主学年で埋める
+    // 「一つ下」に十分な在庫がない等で総数に満たない場合は主学年で埋める
     let result = [...mainSlots, ...belowSlots];
-    if (result.length < this.TOTAL) {
-      fillFrom(plan.main, result, this.TOTAL);
+    if (result.length < total) {
+      fillFrom(plan.main, result, total);
     }
+    result = result.slice(0, total);
 
-    return shuffle(result.slice(0, this.TOTAL));
+    // 出題順序：五十音順（＝データ収録順）／ランダム（シャッフル）
+    if (Store.getOrderMode() === 'gojuon') {
+      const order = new Map();
+      this.getAll().forEach((p, i) => { if (!order.has(p.key)) order.set(p.key, i); });
+      return result.sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+    }
+    return shuffle(result);
   }
 };
 
@@ -956,10 +996,10 @@ const BADGES = [
   { cat: '長くつづけた', icon: '🌗', name: '3ヶ月つづけた', need: '90日＋30回', met: c => c.days >= 90 && c.sessions >= 30 },
   { cat: '長くつづけた', icon: '🌙', name: '半年つづけた', need: '180日＋60回', met: c => c.days >= 180 && c.sessions >= 60 },
   { cat: '長くつづけた', icon: '🎊', name: '1年つづけた', need: '365日＋120回', met: c => c.days >= 365 && c.sessions >= 120 },
-  // E. 複数学年チャレンジ
+  // E. 複数学年チャレンジ（2年〜中3の全8段階）
   { cat: '学年チャレンジ', icon: '🧩', name: '2学年', need: '2学年を経験', met: c => c.grades >= 2 },
-  { cat: '学年チャレンジ', icon: '🎨', name: '3学年', need: '3学年を経験', met: c => c.grades >= 3 },
-  { cat: '学年チャレンジ', icon: '🏅', name: '全学年', need: '2〜5年すべて', met: c => c.grades >= 4 }
+  { cat: '学年チャレンジ', icon: '🎨', name: '5学年', need: '5学年を経験', met: c => c.grades >= 5 },
+  { cat: '学年チャレンジ', icon: '🏅', name: '全学年', need: '2年〜中3すべて', met: c => c.grades >= 8 }
 ];
 
 function badgeContext() {
@@ -1056,7 +1096,7 @@ const App = {
       <h2>📖 答えあわせ</h2>
       <div class="grade-check-label" style="margin-bottom:14px">かみの答えとくらべて、⭕か❌をえらんでね<br>（おうちの人といっしょにチェックしてもいいよ）</div>
       ${items}
-      <button class="btn btn-success" id="btn-finish" disabled onclick="App.finishQuiz()">あと10問 チェックしてね</button>
+      <button class="btn btn-success" id="btn-finish" disabled onclick="App.finishQuiz()">あと${this.questions.length}問 チェックしてね</button>
     `;
     window.scrollTo(0, 0);
   },
@@ -1093,6 +1133,7 @@ const App = {
     const score = this.answers.filter(Boolean).length;
     const total = this.questions.length;
     document.getElementById('res-score').textContent = score;
+    document.getElementById('res-den').textContent = `/ ${total}`;
     const pct = Math.round(score / total * 100);
     let msg, sub;
     if (pct === 100) { msg = '🎉 かんぺき！すごい！'; sub = '全問正解！今日もよくがんばりました！'; }
@@ -1125,18 +1166,27 @@ const App = {
     const profiles = Store.listProfiles();
     document.getElementById('profile-tabs').innerHTML = profiles.map(p =>
       `<button class="profile-btn ${p.id === activeId ? 'active' : ''}" onclick="App.switchProfile('${p.id}')">
-        ${p.name}<span class="p-grade">${p.grade}年生</span>
+        ${p.name}<span class="p-grade">${gradeLabel(p.grade)}</span>
       </button>`
     ).join('');
 
     const grade = Store.getGrade();
-    const grades = ['2', '3', '4', '5'];
-    document.getElementById('home-grade-tabs').innerHTML = grades.map(g =>
-      `<button class="grade-tab ${g === grade ? 'active' : ''}" onclick="App.changeProfileGrade('${g}')">${g}年生</button>`
+    document.getElementById('home-grade-tabs').innerHTML = GRADE_ORDER.map(g =>
+      `<button class="grade-tab ${g === grade ? 'active' : ''}" onclick="App.changeProfileGrade('${g}')">${gradeLabel(g)}</button>`
+    ).join('');
+
+    const qCount = Store.getQCount();
+    document.getElementById('home-qcount-tabs').innerHTML = [10, 20].map(n =>
+      `<button class="grade-tab ${n === qCount ? 'active' : ''}" onclick="App.changeQCount(${n})">${n}問</button>`
+    ).join('');
+
+    const order = Store.getOrderMode();
+    document.getElementById('home-order-tabs').innerHTML = [['random', 'ランダム'], ['gojuon', '五十音順']].map(([m, label]) =>
+      `<button class="grade-tab ${m === order ? 'active' : ''}" onclick="App.changeOrderMode('${m}')">${label}</button>`
     ).join('');
 
     document.getElementById('home-subtitle').textContent =
-      `${Store.getName()}のもんだい（${grade}年生ちゅうしん）`;
+      `${Store.getName()}のもんだい（${gradeLabel(grade)}ちゅうしん）`;
   },
 
   // 子ども（プロフィール）を切り替える
@@ -1149,6 +1199,16 @@ const App = {
   // アクティブなプロフィールの学年を変更する
   changeProfileGrade(g) {
     Store.setGrade(g);
+    this.renderHome();
+  },
+  // 出題数を変更する
+  changeQCount(n) {
+    Store.setQCount(n);
+    this.renderHome();
+  },
+  // 出題順序を変更する
+  changeOrderMode(m) {
+    Store.setOrderMode(m);
     this.renderHome();
   },
 
@@ -1190,14 +1250,14 @@ const App = {
     if (sess) {
       statusEl.innerHTML = `
         <div class="today-done-banner">
-          <div class="big">✅ ${sess.score}/10</div>
+          <div class="big">✅ ${sess.score}/${sess.questions.length}</div>
           <p>今日のテストはおわっています！<br>また明日！</p>
         </div>
       `;
     } else {
       statusEl.innerHTML = `
         <button class="btn btn-success" onclick="App.startQuiz()" style="margin-bottom:14px">
-          📝 今日の10問をはじめる
+          📝 今日の${Store.getQCount()}問をはじめる
         </button>
       `;
     }
@@ -1227,11 +1287,10 @@ const App = {
     }
     document.getElementById('map-profile-badge').textContent = `👦 ${Store.getName()}の記録`;
 
-    const grades = ['2', '3', '4', '5'];
     // tabs
-    document.getElementById('map-tabs').innerHTML = grades.map(g =>
+    document.getElementById('map-tabs').innerHTML = GRADE_ORDER.map(g =>
       `<button class="grade-tab ${g === this.mapGrade ? 'active' : ''}"
-        onclick="App.mapGrade='${g}';App.renderMap()">${g}年生</button>`
+        onclick="App.mapGrade='${g}';App.renderMap()">${gradeLabel(g)}</button>`
     ).join('');
 
     const entries = KANJI_DATA.filter(e => e[1] === this.mapGrade);
@@ -1259,18 +1318,21 @@ const App = {
   },
 
   renderList() {
-    const grades = ['2', '3', '4', '5'];
-    document.getElementById('list-tabs').innerHTML = grades.map(g =>
+    document.getElementById('list-tabs').innerHTML = GRADE_ORDER.map(g =>
       `<button class="grade-tab ${g === this.listGrade ? 'active' : ''}"
-        onclick="App.listGrade='${g}';App.renderList()">${g}年生</button>`
+        onclick="App.listGrade='${g}';App.renderList()">${gradeLabel(g)}</button>`
     ).join('');
 
     const entries = KANJI_DATA.filter(e => e[1] === this.listGrade);
+    const bgCls = ['2', '3', '4', '5'].includes(this.listGrade) ? `grade${this.listGrade}-bg` : 'gradeJ-bg';
     const grid = entries.map(([kanji, grade]) =>
-      `<div class="kl-cell grade${grade}-bg" onclick="showModal('${kanji}','${grade}')">${kanji}</div>`
+      `<div class="kl-cell ${bgCls}" onclick="showModal('${kanji}','${grade}')">${kanji}</div>`
     ).join('');
+    const note = this.listGrade.startsWith('J')
+      ? '<div class="list-note">※中学の漢字は公式な学年配当がないため、アプリ独自の目安で分類しています。</div>'
+      : '';
     document.getElementById('list-content').innerHTML =
-      `<div class="kanji-list-grid">${grid}</div>`;
+      `${note}<div class="kanji-list-grid">${grid}</div>`;
   },
 
   calView: null,
