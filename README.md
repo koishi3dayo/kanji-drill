@@ -18,6 +18,31 @@
 - データは端末内の `localStorage` に保存（外部送信なし・1台運用）
 - PWA（`manifest.json` + Service Worker）
 
+## システム構成
+
+```mermaid
+flowchart LR
+  Dev["開発環境\n(ローカルPC)"]
+  Repo["リポジトリ\n(GitHub)"]
+  Pages["GitHub Pages\n(静的配信)"]
+
+  subgraph Client["利用者の端末（ブラウザ）"]
+    App["漢字ドリル\n(PWA本体)"]
+    SW["Service Worker\n(オフラインキャッシュ)"]
+    LS["localStorage\n(進捗データ)"]
+    App --> SW
+    App --> LS
+  end
+
+  Dev -- "git push" --> Repo
+  Repo -- "自動デプロイ" --> Pages
+  Pages -- "HTTPS配信" --> App
+```
+
+- **開発環境**：`index.html`・`kanji-data.js`・`sentence-data.js` 等を編集し、`git push` でリポジトリへ反映
+- **GitHub Pages**：リポジトリの内容をそのまま静的ホスティング（サーバーサイド処理なし）
+- **利用者の端末**：PWA本体がService Workerでオフラインキャッシュを持ち、進捗データはlocalStorageに保存（外部送信なし・端末ごとに独立）
+
 ## ファイル構成
 
 | ファイル | 役割 |
