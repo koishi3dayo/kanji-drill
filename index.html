@@ -298,6 +298,32 @@ button, .nav-btn, .heat-cell, .kl-cell, .cal-cell, .grade-tab { touch-action: ma
 .gradeJ-bg { background: #eaf6ec; }
 .list-note { font-size: 11px; color: var(--text-light); margin-bottom: 10px; line-height: 1.5; }
 
+/* ── 習った漢字を選ぶ ── */
+.learned-actions { display: flex; gap: 8px; margin-bottom: 12px; }
+.learned-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.learned-cell {
+  aspect-ratio: 1; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: bold; cursor: pointer; position: relative;
+  background: var(--bg); border: 2px solid var(--border); color: var(--text-light);
+}
+.learned-cell.on { background: #fff8e1; border-color: var(--accent); color: var(--text); }
+.learned-cell.on::after {
+  content: '✓'; position: absolute; top: -6px; right: -6px;
+  background: var(--success); color: #fff; font-size: 11px;
+  width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.learned-summary-box {
+  font-size: 13px; color: var(--text); margin-top: 10px;
+  background: var(--bg); border-radius: 10px; padding: 10px 12px;
+}
+.learned-summary-box .cnt { font-weight: bold; color: var(--primary); }
+.btn-learned {
+  display: block; width: 100%; margin-top: 10px; padding: 12px;
+  border-radius: 12px; border: 2px solid var(--accent); background: #fff8e1;
+  color: #8a6d1a; font-size: 14px; font-weight: bold; cursor: pointer; min-height: 48px;
+}
+@media (max-width: 380px) { .learned-grid { grid-template-columns: repeat(5, 1fr); } }
+
 /* ── モーダル ── */
 .modal-overlay {
   display: none; position: fixed; inset: 0;
@@ -498,6 +524,9 @@ h2 { font-size: 18px; margin-bottom: 14px; }
           <div class="grade-tabs" id="home-order-tabs"></div>
         </div>
       </div>
+      <div class="card-title" style="margin-top:12px">📚 学習モード</div>
+      <div class="grade-tabs" id="home-mode-tabs"></div>
+      <div id="learned-summary"></div>
     </div>
     <div class="home-header">
       <h1>✏️ 漢字ドリル</h1>
@@ -551,6 +580,19 @@ h2 { font-size: 18px; margin-bottom: 14px; }
     <button class="btn btn-outline" id="btn-review-result" style="margin-bottom:10px">📖 この回を見返す</button>
     <button class="btn btn-primary" onclick="App.navigate('home')" style="margin-bottom:10px">🏠 ホームにもどる</button>
     <button class="btn btn-outline" onclick="App.navigate('map')" style="margin-bottom:10px">📊 しんちょくをみる</button>
+  </div>
+
+  <!-- 習った漢字を選ぶ -->
+  <div id="screen-learned" class="screen">
+    <h2>✅ 習った漢字をえらぶ</h2>
+    <div class="profile-badge" id="learned-profile-badge"></div>
+    <div class="list-note" id="learned-note"></div>
+    <div class="learned-actions">
+      <button class="btn-sm btn-outline" onclick="App.learnedSelectAll(true)">ぜんぶチェック</button>
+      <button class="btn-sm btn-outline" onclick="App.learnedSelectAll(false)">ぜんぶ解除</button>
+    </div>
+    <div id="learned-grid"></div>
+    <button class="btn btn-primary" onclick="App.navigate('home')" style="margin-top:14px;margin-bottom:10px">🏠 ホームにもどる</button>
   </div>
 
   <!-- テスト見返し -->
@@ -650,7 +692,7 @@ const Store = {
 
   // プロフィール1件分の空データ
   emptyProfile(name, grade) {
-    return { name, grade, qCount: 10, orderMode: 'random', history: {}, stats: {}, streak: { current: 0, last: '' } };
+    return { name, grade, qCount: 10, orderMode: 'random', studyMode: 'preview', learnedByGrade: {}, history: {}, stats: {}, streak: { current: 0, last: '' } };
   },
 
   // ルート構造（activeProfile ＋ 3人分のprofiles）の初期値
@@ -678,8 +720,11 @@ const Store = {
       ['1', '2', '3'].forEach(id => {
         if (!raw.profiles[id]) raw.profiles[id] = def.profiles[id];
         else {
-          if (raw.profiles[id].qCount == null) raw.profiles[id].qCount = 10;
-          if (raw.profiles[id].orderMode == null) raw.profiles[id].orderMode = 'random';
+          const p = raw.profiles[id];
+          if (p.qCount == null) p.qCount = 10;
+          if (p.orderMode == null) p.orderMode = 'random';
+          if (p.studyMode == null) p.studyMode = 'preview';
+          if (p.learnedByGrade == null) p.learnedByGrade = {};
         }
       });
       return raw;
@@ -734,6 +779,45 @@ const Store = {
   // 出題順序（未設定はランダム）
   getOrderMode() { return this.load().orderMode || 'random'; },
   setOrderMode(m) { const p = this.load(); p.orderMode = m; this.save(p); },
+  // 学習モード（未設定は予習）
+  getStudyMode() { return this.load().studyMode || 'preview'; },
+  setStudyMode(m) { const p = this.load(); p.studyMode = m; this.save(p); },
+
+  // ── 習った漢字リスト ──
+  // 現在の学年で明示的に「習った」とチェックされた漢字の配列
+  getLearnedForGrade(grade) {
+    const lb = this.load().learnedByGrade || {};
+    return lb[grade] || [];
+  },
+  // 現在の学年の習った漢字を上書き保存
+  setLearnedForGrade(grade, kanjiArr) {
+    const p = this.load();
+    if (!p.learnedByGrade) p.learnedByGrade = {};
+    p.learnedByGrade[grade] = kanjiArr;
+    this.save(p);
+  },
+  // 1文字のトグル（チェック/解除）
+  toggleLearned(grade, kanji) {
+    const cur = new Set(this.getLearnedForGrade(grade));
+    if (cur.has(kanji)) cur.delete(kanji); else cur.add(kanji);
+    this.setLearnedForGrade(grade, [...cur]);
+  },
+  // 「習った漢字」の判定用セット
+  //  = 現在の学年より下の学年は全て習った扱い ＋ 現在の学年の明示選択ぶん
+  getLearnedSet() {
+    const grade = this.getGrade();
+    const idx = GRADE_ORDER.indexOf(grade);
+    const set = new Set();
+    // 下の学年は全て習った扱い（kanji_grade キーで登録）
+    for (let i = 0; i < idx; i++) {
+      const g = GRADE_ORDER[i];
+      KANJI_DATA.forEach(e => { if (e[1] === g) set.add(`${e[0]}_${g}`); });
+    }
+    // 現在の学年は明示選択ぶんのみ
+    this.getLearnedForGrade(grade).forEach(k => set.add(`${k}_${grade}`));
+    return set;
+  },
+
   getName(id) {
     const root = this.loadRoot();
     return (root.profiles[id || root.activeProfile] || {}).name || '';
@@ -872,8 +956,23 @@ const Quiz = {
     return { main: grade, below, mainSlots: total - belowSlots, belowSlots };
   },
 
-  // 今日の問題を選ぶ（プロフィールの学年・出題数・出題順序に応じる）
+  // 出題順序を適用（五十音順＝データ収録順／ランダム）
+  applyOrder(result) {
+    if (Store.getOrderMode() === 'gojuon') {
+      const order = new Map();
+      this.getAll().forEach((p, i) => { if (!order.has(p.key)) order.set(p.key, i); });
+      return result.slice().sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+    }
+    return shuffle(result);
+  },
+
+  // 今日の問題を選ぶ（学習モードで分岐）
   selectDaily() {
+    return Store.getStudyMode() === 'review' ? this.selectReview() : this.selectPreview();
+  },
+
+  // 予習モード：学年重み付け（従来どおり）
+  selectPreview() {
     const grade = Store.getGrade();
     const total = Store.getQCount();
     const plan = this.slotPlan(grade, total);
@@ -924,15 +1023,48 @@ const Quiz = {
     if (result.length < total) {
       fillFrom(plan.main, result, total);
     }
-    result = result.slice(0, total);
+    return this.applyOrder(result.slice(0, total));
+  },
 
-    // 出題順序：五十音順（＝データ収録順）／ランダム（シャッフル）
-    if (Store.getOrderMode() === 'gojuon') {
-      const order = new Map();
-      this.getAll().forEach((p, i) => { if (!order.has(p.key)) order.set(p.key, i); });
-      return result.sort((a, b) => (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
+  // 復習モード：習った漢字リストからのみ出題
+  //  ①「習った」かつ「前回まちがえた」を最優先 ②残りは習った漢字の正解率低・未出題を優先
+  selectReview() {
+    const total = Store.getQCount();
+    const learned = Store.getLearnedSet();       // 習った漢字のキー集合
+    const all = this.getAll().filter(p => learned.has(p.key));
+    const usedKeys = new Set();
+    const result = [];
+
+    // ① 前回まちがえた ∩ 習った漢字
+    const wrongYest = Store.getYesterdayWrong();
+    wrongYest.forEach(q => {
+      if (result.length < total && learned.has(q.key) && !usedKeys.has(q.key)) {
+        result.push({ ...q, isRetry: true }); usedKeys.add(q.key);
+      }
+    });
+
+    // ② 残りを習った漢字プールから正解率低・未出題優先で補充
+    //   未出題(1000)にも乱数を加え、同じ未出題どうしが配列順（低学年固定）に偏らないようにする
+    const scored = all
+      .filter(p => !usedKeys.has(p.key))
+      .map(p => {
+        const s = Store.getStats(p.key);
+        const base = s.tested === 0 ? 1000 : (1 - s.correct / s.tested) * 100;
+        return { ...p, priority: base + Math.random() * 30 };
+      })
+      .sort((a, b) => b.priority - a.priority);
+    for (const p of scored) {
+      if (result.length >= total) break;
+      result.push(p); usedKeys.add(p.key);
     }
-    return shuffle(result);
+
+    return this.applyOrder(result.slice(0, total));
+  },
+
+  // 復習モードで出題できる漢字が1つでもあるか
+  hasReviewPool() {
+    const learned = Store.getLearnedSet();
+    return this.getAll().some(p => learned.has(p.key));
   }
 };
 
@@ -1033,14 +1165,25 @@ const App = {
     if (screen === 'map') this.renderMap();
     if (screen === 'list') this.renderList();
     if (screen === 'calendar') this.renderCalendar();
+    if (screen === 'learned') this.renderLearned();
   },
 
   startQuiz() {
+    // 復習モードで出題できる漢字が無い場合はガード
+    if (Store.getStudyMode() === 'review' && !Quiz.hasReviewPool()) {
+      alert('復習モードで出す漢字がまだありません。\n「習った漢字をえらぶ」でチェックを入れてね。');
+      this.navigate('learned');
+      return;
+    }
     const sess = Store.getTodaySession();
     if (sess) {
       if (!confirm('今日はすでにテストをやりました。もう一度やりますか？')) return;
     }
     this.questions = Quiz.selectDaily();
+    if (!this.questions.length) {
+      alert('出題できる漢字が見つかりませんでした。設定を確認してね。');
+      return;
+    }
     this.answers = new Array(this.questions.length).fill(null);
     this.navigate('quiz');
     this.renderAllQuestions();
@@ -1185,6 +1328,26 @@ const App = {
       `<button class="grade-tab ${m === order ? 'active' : ''}" onclick="App.changeOrderMode('${m}')">${label}</button>`
     ).join('');
 
+    // 学習モード
+    const mode = Store.getStudyMode();
+    document.getElementById('home-mode-tabs').innerHTML = [['preview', '📖 予習'], ['review', '🔁 復習']].map(([m, label]) =>
+      `<button class="grade-tab ${m === mode ? 'active' : ''}" onclick="App.changeStudyMode('${m}')">${label}</button>`
+    ).join('');
+
+    // 習った漢字の選択状況と、選ぶボタン
+    const total = KANJI_DATA.filter(e => e[1] === grade).length;
+    const chosen = Store.getLearnedForGrade(grade).length;
+    const modeNote = mode === 'review'
+      ? '復習モード：習った漢字から出題します'
+      : '予習モード：学年の漢字から出題します';
+    document.getElementById('learned-summary').innerHTML = `
+      <div class="learned-summary-box">
+        ${modeNote}<br>
+        ${gradeLabel(grade)}の習った漢字：<span class="cnt">${chosen} / ${total}</span> 字えらんでいます
+      </div>
+      <button class="btn-learned" onclick="App.navigate('learned')">✅ 習った漢字をえらぶ</button>
+    `;
+
     document.getElementById('home-subtitle').textContent =
       `${Store.getName()}のもんだい（${gradeLabel(grade)}ちゅうしん）`;
   },
@@ -1210,6 +1373,45 @@ const App = {
   changeOrderMode(m) {
     Store.setOrderMode(m);
     this.renderHome();
+  },
+  // 学習モード（予習/復習）を変更する
+  changeStudyMode(m) {
+    Store.setStudyMode(m);
+    this.renderHome();
+  },
+
+  // ── 習った漢字を選ぶ画面 ──
+  renderLearned() {
+    const grade = Store.getGrade();
+    document.getElementById('learned-profile-badge').textContent = `👦 ${Store.getName()}（${gradeLabel(grade)}）`;
+    const entries = KANJI_DATA.filter(e => e[1] === grade);
+    const learned = new Set(Store.getLearnedForGrade(grade));
+    const idx = GRADE_ORDER.indexOf(grade);
+    const belowNote = idx > 0
+      ? `${gradeLabel(GRADE_ORDER[idx - 1])}までの漢字は、ぜんぶ「習った」あつかいです。`
+      : 'この学年より下の学年はありません。';
+    document.getElementById('learned-note').innerHTML =
+      `学校で習った ${gradeLabel(grade)}の漢字にチェックを入れてね。<br>${belowNote}`;
+    document.getElementById('learned-grid').innerHTML =
+      `<div class="learned-grid">` + entries.map(([k]) =>
+        `<div class="learned-cell ${learned.has(k) ? 'on' : ''}" onclick="App.toggleLearnedCell(this,'${k}')">${k}</div>`
+      ).join('') + `</div>`;
+  },
+
+  toggleLearnedCell(el, kanji) {
+    const grade = Store.getGrade();
+    Store.toggleLearned(grade, kanji);
+    el.classList.toggle('on');
+  },
+
+  learnedSelectAll(on) {
+    const grade = Store.getGrade();
+    if (on) {
+      Store.setLearnedForGrade(grade, KANJI_DATA.filter(e => e[1] === grade).map(e => e[0]));
+    } else {
+      Store.setLearnedForGrade(grade, []);
+    }
+    this.renderLearned();
   },
 
   // バッジコレクションを描画（獲得＝色付き／未獲得＝グレー＋条件）
