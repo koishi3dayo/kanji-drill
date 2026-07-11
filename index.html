@@ -676,7 +676,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 </div>
 
 <script src="kanji-data.js?v=4"></script>
-<script src="sentence-data.js?v=4"></script>
+<script src="sentence-data.js?v=5"></script>
 <script src="sentence-data-alt.js?v=1"></script>
 <script>
 // 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
@@ -1042,12 +1042,14 @@ const Quiz = {
     return this.applyOrder(result.slice(0, total));
   },
 
-  // 問題の答え（{{ }}内）に含まれる漢字が「全て習った漢字」かを判定
+  // 問題の答え（すべての{{ }}内）に含まれる漢字が「全て習った漢字」かを判定
   isProblemLearned(p) {
-    const m = (p.tpl || '').match(/\{\{(.*?)\}\}/);
-    if (!m) return false;
-    for (const ch of m[1]) {
-      if (/[一-鿿]/.test(ch) && !Store.isCharLearned(ch)) return false;
+    const matches = [...(p.tpl || '').matchAll(/\{\{(.*?)\}\}/g)];
+    if (!matches.length) return false;
+    for (const m of matches) {
+      for (const ch of m[1]) {
+        if (/[一-鿿]/.test(ch) && !Store.isCharLearned(ch)) return false;
+      }
     }
     return true;
   },
@@ -1121,11 +1123,19 @@ const Quiz = {
 };
 
 // tpl: "こう{{園}}で遊ぶ" のような文字列から各表示形式を作る
-const TPL_RE = /\{\{(.*?)\}\}/;
+//  tplは{{ }}を複数含められる（例:「あか{{組}}と{{しろ組}}」）。
+//  readingは通常は文字列（{{}}が1つの場合）。{{}}が複数あるときは、
+//  出現順に対応する読みを並べた配列にする（例:["ぐみ","しろぐみ"]）。
+const TPL_RE = /\{\{(.*?)\}\}/g;
+function readingList(q) {
+  return Array.isArray(q.reading) ? q.reading : [q.reading];
+}
 
 // 出題文（対象部分はかな・下線つき）
 function fmtQuestion(q) {
-  return q.tpl.replace(TPL_RE, '<u class="tgt-u">' + q.reading + '</u>');
+  const readings = readingList(q);
+  let i = 0;
+  return q.tpl.replace(TPL_RE, () => '<u class="tgt-u">' + readings[i++] + '</u>');
 }
 // 答え文（対象部分は漢字・色つき）
 function fmtAnswer(q) {
@@ -1133,7 +1143,9 @@ function fmtAnswer(q) {
 }
 // プレーンテキスト版（結果画面の一覧などで使用）
 function plainQuestion(q) {
-  return q.tpl.replace(TPL_RE, q.reading);
+  const readings = readingList(q);
+  let i = 0;
+  return q.tpl.replace(TPL_RE, () => readings[i++]);
 }
 function plainAnswer(q) {
   return q.tpl.replace(TPL_RE, (_, k) => k);
