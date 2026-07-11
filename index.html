@@ -677,12 +677,16 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 
 <script src="kanji-data.js?v=4"></script>
 <script src="sentence-data.js?v=4"></script>
+<script src="sentence-data-alt.js?v=1"></script>
 <script>
 // 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
 const GRADE_ORDER = ['2', '3', '4', '5', '6', 'J1', 'J2', 'J3'];
 // 学年コード → 表示ラベル
 const GRADE_LABEL = { '2': '2年', '3': '3年', '4': '4年', '5': '5年', '6': '6年', 'J1': '中1', 'J2': '中2', 'J3': '中3' };
 function gradeLabel(g) { return GRADE_LABEL[g] || (g + '年'); }
+// 漢字1文字 → 収録学年（本アプリの収録範囲。1年配当や範囲外は未登録）
+const KANJI_GRADE = {};
+KANJI_DATA.forEach(e => { KANJI_GRADE[e[0]] = e[1]; });
 
 // ─────────────────────────────────────────
 // ストレージ
@@ -816,6 +820,18 @@ const Store = {
     // 現在の学年は明示選択ぶんのみ
     this.getLearnedForGrade(grade).forEach(k => set.add(`${k}_${grade}`));
     return set;
+  },
+  // 漢字1文字が「習った」かを判定
+  //  収録範囲外(1年配当など)・非漢字 → 習得済み扱い／下の学年 → 習得済み
+  //  現在の学年 → 明示選択されていれば習得済み／上の学年 → 未習
+  isCharLearned(char) {
+    const g = KANJI_GRADE[char];
+    if (!g) return true;
+    const curIdx = GRADE_ORDER.indexOf(this.getGrade());
+    const cIdx = GRADE_ORDER.indexOf(g);
+    if (cIdx < curIdx) return true;
+    if (cIdx === curIdx) return this.getLearnedForGrade(g).includes(char);
+    return false;
   },
 
   getName(id) {
@@ -1026,35 +1042,72 @@ const Quiz = {
     return this.applyOrder(result.slice(0, total));
   },
 
-  // 復習モード：習った漢字リストからのみ出題
-  //  ①「習った」かつ「前回まちがえた」を最優先 ②残りは習った漢字の正解率低・未出題を優先
+  // 問題の答え（{{ }}内）に含まれる漢字が「全て習った漢字」かを判定
+  isProblemLearned(p) {
+    const m = (p.tpl || '').match(/\{\{(.*?)\}\}/);
+    if (!m) return false;
+    for (const ch of m[1]) {
+      if (/[一-鿿]/.test(ch) && !Store.isCharLearned(ch)) return false;
+    }
+    return true;
+  },
+
+  // 代替問題（SENTENCE_DATA_ALT）から、その漢字の問題オブジェクトを作る
+  getAltProblem(kanji, grade) {
+    if (typeof SENTENCE_DATA_ALT === 'undefined') return null;
+    const a = SENTENCE_DATA_ALT[kanji];
+    if (!a) return null;
+    return {
+      kanji, grade, key: `${kanji}_${grade}`,
+      type: a.type,
+      typeCls: a.type === '書き' ? 'type-kaki' : 'type-jukugo',
+      tpl: a.tpl, reading: a.reading
+    };
+  },
+
+  // 復習で出題できる形にして返す。出せなければ null
+  //  元の問題が全文字習得済みならそのまま／未習の相方を含むなら代替問題を試す
+  getReviewCandidate(p) {
+    if (this.isProblemLearned(p)) return { ...p };
+    const alt = this.getAltProblem(p.kanji, p.grade);
+    if (alt && this.isProblemLearned(alt)) {
+      // 元がretry（前回まちがえた）なら代替にも引き継ぐ
+      return p.isRetry ? { ...alt, isRetry: true } : alt;
+    }
+    return null;
+  },
+
+  // 復習モード：習った漢字リストからのみ出題（熟語は全文字が習得済みのもの／代替で救済）
+  //  ①「習った」かつ「前回まちがえた」を最優先 ②残りは正解率低・未出題を優先
   selectReview() {
     const total = Store.getQCount();
-    const learned = Store.getLearnedSet();       // 習った漢字のキー集合
-    const all = this.getAll().filter(p => learned.has(p.key));
     const usedKeys = new Set();
     const result = [];
 
-    // ① 前回まちがえた ∩ 習った漢字
+    // ① 前回まちがえた漢字を、復習可能な形（元 or 代替）で優先
     const wrongYest = Store.getYesterdayWrong();
     wrongYest.forEach(q => {
-      if (result.length < total && learned.has(q.key) && !usedKeys.has(q.key)) {
-        result.push({ ...q, isRetry: true }); usedKeys.add(q.key);
-      }
+      if (result.length >= total || usedKeys.has(q.key)) return;
+      const cand = this.getReviewCandidate({ ...q, isRetry: true });
+      if (cand) { result.push(cand); usedKeys.add(q.key); }
     });
 
-    // ② 残りを習った漢字プールから正解率低・未出題優先で補充
-    //   未出題(1000)にも乱数を加え、同じ未出題どうしが配列順（低学年固定）に偏らないようにする
-    const scored = all
-      .filter(p => !usedKeys.has(p.key))
-      .map(p => {
+    // ② 残りを、復習可能な漢字プールから正解率低・未出題優先で補充
+    //   未出題(1000)にも乱数を加え、配列順（低学年固定）に偏らないようにする
+    const pool = [];
+    this.getAll().forEach(p => {
+      if (usedKeys.has(p.key)) return;
+      const cand = this.getReviewCandidate(p);
+      if (cand) {
         const s = Store.getStats(p.key);
         const base = s.tested === 0 ? 1000 : (1 - s.correct / s.tested) * 100;
-        return { ...p, priority: base + Math.random() * 30 };
-      })
-      .sort((a, b) => b.priority - a.priority);
-    for (const p of scored) {
+        pool.push({ ...cand, priority: base + Math.random() * 30 });
+      }
+    });
+    pool.sort((a, b) => b.priority - a.priority);
+    for (const p of pool) {
       if (result.length >= total) break;
+      if (usedKeys.has(p.key)) continue;
       result.push(p); usedKeys.add(p.key);
     }
 
@@ -1063,8 +1116,7 @@ const Quiz = {
 
   // 復習モードで出題できる漢字が1つでもあるか
   hasReviewPool() {
-    const learned = Store.getLearnedSet();
-    return this.getAll().some(p => learned.has(p.key));
+    return this.getAll().some(p => this.getReviewCandidate(p) !== null);
   }
 };
 

@@ -8,3 +8,6 @@ __pycache__/
 # バックアップ・一時ファイル
 *.bak
 *.tmp
+
+# 作業用の分析ログ（scripts配下のメモ）
+scripts/*.txt
