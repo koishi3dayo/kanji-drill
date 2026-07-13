@@ -1,13 +1,13 @@
 // 漢字ドリル Service Worker（オフライン起動用）
 // キャッシュのバージョン。アプリ更新時はこの数字を上げると自動で新版に切り替わる。
-const CACHE = 'kanji-drill-v8';
+const CACHE = 'kanji-drill-v9';
 
 const ASSETS = [
   './',
   './index.html',
   './kanji-data.js?v=4',
-  './sentence-data.js?v=5',
-  './sentence-data-alt.js?v=1',
+  './sentence-data.js?v=6',
+  './sentence-data-alt.js?v=2',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

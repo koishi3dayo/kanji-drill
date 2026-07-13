@@ -503,7 +503,7 @@ const SENTENCE_DATA = {
 "妻":[{tpl:"{{妻}}とかいもの",reading:"つま",type:"書き"}],
 "採":[{tpl:"きのみを{{採る}}",reading:"とる",type:"書き"}],
 "際":[{tpl:"{{国際}}交流",reading:"こくさい",type:"熟語"}],
-"在":[{tpl:"{{現在}}の事故く",reading:"げんざい",type:"熟語"}],
+"在":[{tpl:"{{現在}}の時刻",reading:"げんざい",type:"熟語"}],
 "財":[{tpl:"{{財布}}をおとす",reading:"さいふ",type:"熟語"}],
 "罪":[{tpl:"{{罪}}をみとめる",reading:"つみ",type:"書き"}],
 "雑":[{tpl:"{{雑誌}}をよむ",reading:"ざっし",type:"熟語"}],
