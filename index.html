@@ -676,7 +676,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 </div>
 
 <script src="kanji-data.js?v=4"></script>
-<script src="sentence-data.js?v=6"></script>
+<script src="sentence-data.js?v=7"></script>
 <script src="sentence-data-alt.js?v=2"></script>
 <script>
 // 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
@@ -696,7 +696,7 @@ const Store = {
 
   // プロフィール1件分の空データ
   emptyProfile(name, grade) {
-    return { name, grade, qCount: 10, orderMode: 'random', studyMode: 'preview', learnedByGrade: {}, history: {}, stats: {}, streak: { current: 0, last: '' } };
+    return { name, grade, qCount: 10, orderMode: 'random', studyMode: 'preview', learnedByGrade: {}, history: {}, stats: {}, streak: { current: 0, last: '' }, srs: {} };
   },
 
   // ルート構造（activeProfile ＋ 3人分のprofiles）の初期値
@@ -729,6 +729,7 @@ const Store = {
           if (p.orderMode == null) p.orderMode = 'random';
           if (p.studyMode == null) p.studyMode = 'preview';
           if (p.learnedByGrade == null) p.learnedByGrade = {};
+          if (p.srs == null) p.srs = {};
         }
       });
       return raw;
@@ -866,12 +867,49 @@ const Store = {
     const d = this.load();
     return d.history[this.today()] || null;
   },
-  getYesterdayWrong() {
-    const d = this.load();
-    const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const sess = d.history[yest];
-    if (!sess) return [];
-    return sess.questions.filter((_, i) => !sess.answers[i]);
+  // ── 間隔反復（スペースド・リピティション、v2.10 §4.3.2）──
+  //  ステージ0〜7＝翌日/3日後/5日後/1週間後/10日後/15日後/20日後/30日後
+  SRS_STAGE_DAYS: [1, 3, 5, 7, 10, 15, 20, 30],
+
+  getSrsMap() { return this.load().srs || {}; },
+
+  // 1問の正誤を受けて、間隔反復の状態（ステージ・次回対象日）を更新する
+  //  正解: 追跡中の漢字のみ対象。連続2回正解で追跡終了（卒業）、それ未満はステージを1つ進める
+  //  不正解: 追跡中ならステージを1つ戻す／未追跡なら新規にステージ0で開始
+  recordSrsResult(key, correct) {
+    const p = this.load();
+    if (!p.srs) p.srs = {};
+    const cur = p.srs[key];
+    const today = this.today();
+    const days = this.SRS_STAGE_DAYS;
+    if (correct) {
+      if (!cur) return; // 追跡対象外の漢字の正解は間隔反復に影響しない
+      const streak = (cur.correctStreak || 0) + 1;
+      if (streak >= 2) {
+        delete p.srs[key]; // 連続2回正解で卒業
+      } else {
+        const stage = Math.min(cur.stage + 1, days.length - 1);
+        p.srs[key] = { stage, correctStreak: streak, nextDue: addDaysToDateStr(today, days[stage]) };
+      }
+    } else {
+      const stage = cur ? Math.max(cur.stage - 1, 0) : 0;
+      p.srs[key] = { stage, correctStreak: 0, nextDue: addDaysToDateStr(today, days[stage]) };
+    }
+    this.save(p);
+  },
+
+  // 対象日(nextDue)を迎えている問題を、超過日数が長い順に返す
+  getDueSrsKeys(dateStr) {
+    const map = this.getSrsMap();
+    const today = new Date(dateStr + 'T00:00:00');
+    const due = [];
+    Object.entries(map).forEach(([key, s]) => {
+      const nextDue = new Date(s.nextDue + 'T00:00:00');
+      const overdueDays = Math.floor((today - nextDue) / 86400000);
+      if (overdueDays >= 0) due.push({ key, overdueDays });
+    });
+    due.sort((a, b) => b.overdueDays - a.overdueDays);
+    return due;
   },
   getStreak() { return this.load().streak.current || 0; },
   getWeekStats() {
@@ -932,6 +970,18 @@ function weekKey(ds) {
   return d.toISOString().slice(0, 10);
 }
 
+// 日付文字列(YYYY-MM-DD)にn日を加えた日付文字列を返す
+//  ※toISOString()はUTCに変換してしまうため使わない（JST等UTC+の環境で1日ずれる）。
+//    ローカルの年月日を直接組み立てる。
+function addDaysToDateStr(ds, n) {
+  const d = new Date(ds + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // ─────────────────────────────────────────
 // クイズエンジン
 // ─────────────────────────────────────────
@@ -987,6 +1037,22 @@ const Quiz = {
     return Store.getStudyMode() === 'review' ? this.selectReview() : this.selectPreview();
   },
 
+  // 間隔反復（§4.3.2）で対象日を迎えた問題を、超過日数が長い順に最大cap件返す（§4.3.1の上限）
+  //  未習の相方を含む場合は代替問題（getReviewCandidate）に差し替え。差し替え不可なら見送り（対象日は据え置かれ、次回以降に繰り越し）
+  selectSrsDue(cap) {
+    if (cap <= 0) return [];
+    const due = Store.getDueSrsKeys(Store.today());
+    const result = [];
+    for (const { key } of due) {
+      if (result.length >= cap) break;
+      const p = this.getAll().find(x => x.key === key);
+      if (!p) continue;
+      const cand = this.getReviewCandidate({ ...p, isRetry: true });
+      if (cand) result.push(cand);
+    }
+    return result;
+  },
+
   // 予習モード：学年重み付け（従来どおり）
   selectPreview() {
     const grade = Store.getGrade();
@@ -1016,16 +1082,17 @@ const Quiz = {
     const mainSlots = [];
     const belowSlots = [];
 
-    // 前日の不正解を優先。主学年ぶんは主枠へ、それ以外は「一つ下枠(1問)」へ充てる
-    const wrongYest = Store.getYesterdayWrong();
-    wrongYest.forEach(q => {
+    // 間隔反復（§4.3.2）で対象日を迎えた問題を優先（§4.3.1: 出題総数の30%まで）。
+    // 主学年ぶんは主枠へ、それ以外は「一つ下枠」へ充てる
+    const srsDue = this.selectSrsDue(Math.floor(total * 0.3));
+    srsDue.forEach(q => {
       if (q.grade === plan.main) {
         if (mainSlots.length < plan.mainSlots && !usedKeys.has(q.key)) {
-          mainSlots.push({ ...q, isRetry: true }); usedKeys.add(q.key);
+          mainSlots.push(q); usedKeys.add(q.key);
         }
       } else if (plan.belowSlots > 0) {
         if (belowSlots.length < plan.belowSlots && !usedKeys.has(q.key)) {
-          belowSlots.push({ ...q, isRetry: true }); usedKeys.add(q.key);
+          belowSlots.push(q); usedKeys.add(q.key);
         }
       }
     });
@@ -1080,18 +1147,17 @@ const Quiz = {
   },
 
   // 復習モード：習った漢字リストからのみ出題（熟語は全文字が習得済みのもの／代替で救済）
-  //  ①「習った」かつ「前回まちがえた」を最優先 ②残りは正解率低・未出題を優先
+  //  ①「習った」かつ間隔反復（§4.3.2）で対象日を迎えた漢字を最優先（§4.3.1: 30%まで） ②残りは正解率低・未出題を優先
   selectReview() {
     const total = Store.getQCount();
     const usedKeys = new Set();
     const result = [];
 
-    // ① 前回まちがえた漢字を、復習可能な形（元 or 代替）で優先
-    const wrongYest = Store.getYesterdayWrong();
-    wrongYest.forEach(q => {
+    // ① 間隔反復で対象日を迎えた問題を優先
+    const srsDue = this.selectSrsDue(Math.floor(total * 0.3));
+    srsDue.forEach(q => {
       if (result.length >= total || usedKeys.has(q.key)) return;
-      const cand = this.getReviewCandidate({ ...q, isRetry: true });
-      if (cand) { result.push(cand); usedKeys.add(q.key); }
+      result.push(q); usedKeys.add(q.key);
     });
 
     // ② 残りを、復習可能な漢字プールから正解率低・未出題優先で補充
@@ -1328,7 +1394,10 @@ const App = {
 
   finishQuiz() {
     if (this.answers.some(a => a === null)) return;
-    this.questions.forEach((q, i) => Store.recordAnswer(q.key, this.answers[i]));
+    this.questions.forEach((q, i) => {
+      Store.recordAnswer(q.key, this.answers[i]);
+      Store.recordSrsResult(q.key, this.answers[i]);
+    });
     this.lastSessionDate = Store.today();
     Store.saveSession(this.lastSessionDate, this.questions, this.answers);
     this.renderResult();
