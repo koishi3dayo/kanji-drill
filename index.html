@@ -192,6 +192,8 @@ button, .nav-btn, .heat-cell, .kl-cell, .cal-cell, .grade-tab { touch-action: ma
   margin: 8px 0 4px;
 }
 .tgt-u { text-decoration-color: var(--accent); text-decoration-thickness: 3px; text-underline-offset: 5px; }
+/* 送りがなを問う問題は波線にして「送りがなも書く」ことを見た目で区別する（§4.2.8） */
+.tgt-u-okuri { text-decoration-style: wavy; text-decoration-thickness: 3px; text-underline-offset: 6px; }
 .tgt { color: var(--primary); }
 
 /* ── 出題一覧 ── */
@@ -676,8 +678,8 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 </div>
 
 <script src="kanji-data.js?v=4"></script>
-<script src="sentence-data.js?v=8"></script>
-<script src="sentence-data-alt.js?v=2"></script>
+<script src="sentence-data.js?v=9"></script>
+<script src="sentence-data-alt.js?v=3"></script>
 <script>
 // 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
 const GRADE_ORDER = ['2', '3', '4', '5', '6', 'J1', 'J2', 'J3'];
@@ -1201,11 +1203,21 @@ function readingList(q) {
   return Array.isArray(q.reading) ? q.reading : [q.reading];
 }
 
-// 出題文（対象部分はかな・下線つき）
+// 送りがなを問う問題か判定（§4.2.8）
+//  {{ }}の中身が「漢字＋ひらがな」で終わっていれば送りがな込みの出題
+//  例:「数える」「静か」→true ／「公園」「顔」→false
+function isOkuriTarget(target) {
+  return /[一-鿿][ぁ-ん]+$/.test(target);
+}
+
+// 出題文（対象部分はかな・下線つき。送りがな問題は波線）
 function fmtQuestion(q) {
   const readings = readingList(q);
   let i = 0;
-  return q.tpl.replace(TPL_RE, () => '<u class="tgt-u">' + readings[i++] + '</u>');
+  return q.tpl.replace(TPL_RE, (_, k) => {
+    const cls = isOkuriTarget(k) ? 'tgt-u tgt-u-okuri' : 'tgt-u';
+    return '<u class="' + cls + '">' + readings[i++] + '</u>';
+  });
 }
 // 答え文（対象部分は漢字・色つき）
 function fmtAnswer(q) {

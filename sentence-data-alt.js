@@ -65,7 +65,7 @@ const SENTENCE_DATA_ALT = {
 "複":{tpl:"もんだいの{{複数}}",reading:"ふくすう",type:"熟語"},
 "胃":{tpl:"にがい{{胃薬}}",reading:"いぐすり",type:"熟語"},
 "尺":{tpl:"ちずの{{尺度}}",reading:"しゃくど",type:"熟語"},
-"宙":{tpl:"ゆかで{{宙返}}り",reading:"ちゅうがえ",type:"熟語"},
+"宙":{tpl:"ゆかで{{宙返り}}",reading:"ちゅうがえり",type:"熟語"},
 "糖":{tpl:"おおい{{糖分}}",reading:"とうぶん",type:"熟語"},
 "俳":{tpl:"あきの{{俳句}}",reading:"はいく",type:"熟語"},
 "晩":{tpl:"{{毎晩}}のさんぽ",reading:"まいばん",type:"熟語"},
