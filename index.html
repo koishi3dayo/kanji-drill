@@ -840,7 +840,7 @@ const Store = {
     return (root.profiles[id || root.activeProfile] || {}).name || '';
   },
 
-  today() { return new Date().toISOString().slice(0, 10); },
+  today() { return formatLocalDate(new Date()); },
   getStats(kanjiKey) {
     const d = this.load();
     return d.stats[kanjiKey] || { tested: 0, correct: 0 };
@@ -857,7 +857,7 @@ const Store = {
     const score = answers.filter(Boolean).length;
     d.history[date] = { questions, answers, score };
     // streak
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yesterday = formatLocalDate(new Date(Date.now() - 86400000));
     if (d.streak.last === yesterday) d.streak.current++;
     else if (d.streak.last !== date) d.streak.current = 1;
     d.streak.last = date;
@@ -917,7 +917,7 @@ const Store = {
     let total = 0, correct = 0;
     const now = Date.now();
     for (let i = 0; i < 7; i++) {
-      const dt = new Date(now - i * 86400000).toISOString().slice(0, 10);
+      const dt = formatLocalDate(new Date(now - i * 86400000));
       const s = d.history[dt];
       if (s) { total += s.questions.length; correct += s.score; }
     }
@@ -962,24 +962,28 @@ const Store = {
   }
 };
 
+// Dateオブジェクトを、ローカルの年月日で"YYYY-MM-DD"文字列にする
+//  ※Date.toISOString()はUTCに変換してしまうため使わない（JST等UTC+の環境で日付が1日ずれる）。
+function formatLocalDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // 日付文字列(YYYY-MM-DD)を、その週の月曜日をキーにして返す
 function weekKey(ds) {
   const d = new Date(ds + 'T00:00:00');
   const dow = (d.getDay() + 6) % 7;   // 月曜=0, 日曜=6
   d.setDate(d.getDate() - dow);
-  return d.toISOString().slice(0, 10);
+  return formatLocalDate(d);
 }
 
 // 日付文字列(YYYY-MM-DD)にn日を加えた日付文字列を返す
-//  ※toISOString()はUTCに変換してしまうため使わない（JST等UTC+の環境で1日ずれる）。
-//    ローカルの年月日を直接組み立てる。
 function addDaysToDateStr(ds, n) {
   const d = new Date(ds + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return formatLocalDate(d);
 }
 
 // ─────────────────────────────────────────
