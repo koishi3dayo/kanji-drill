@@ -678,7 +678,7 @@ h2 { font-size: 18px; margin-bottom: 14px; }
 </div>
 
 <script src="kanji-data.js?v=4"></script>
-<script src="sentence-data.js?v=9"></script>
+<script src="sentence-data.js?v=10"></script>
 <script src="sentence-data-alt.js?v=3"></script>
 <script>
 // 学年の並び順（この配列上の「1つ前」が“一つ下の学年”）
@@ -732,6 +732,7 @@ const Store = {
           if (p.studyMode == null) p.studyMode = 'preview';
           if (p.learnedByGrade == null) p.learnedByGrade = {};
           if (p.srs == null) p.srs = {};
+          normalizeHistory(p);
         }
       });
       return raw;
@@ -745,6 +746,7 @@ const Store = {
       stats: raw.stats || {},
       streak: raw.streak || { current: 0, last: '' }
     };
+    normalizeHistory(root.profiles['1']);
     root.activeProfile = '1';
     this.saveRoot(root);
     return root;
@@ -854,20 +856,47 @@ const Store = {
     if (correct) d.stats[kanjiKey].correct++;
     this.save(d);
   },
+  // 1回ぶんの結果を保存する。1日の全回数ぶんを残す（上書きしない・§4.1.7）。
+  //  戻り値＝その日の何回目か（0始まりの添字）
   saveSession(date, questions, answers) {
     const d = this.load();
     const score = answers.filter(Boolean).length;
-    d.history[date] = { questions, answers, score };
-    // streak
+    if (!d.history[date]) d.history[date] = { sessions: [] };
+    d.history[date].sessions.push({ questions, answers, score });
+    const index = d.history[date].sessions.length - 1;
+    // streak（同じ日の2回目以降は連続日数を増やさない）
     const yesterday = formatLocalDate(new Date(Date.now() - 86400000));
     if (d.streak.last === yesterday) d.streak.current++;
     else if (d.streak.last !== date) d.streak.current = 1;
     d.streak.last = date;
     this.save(d);
+    return index;
   },
-  getTodaySession() {
-    const d = this.load();
-    return d.history[this.today()] || null;
+  // 指定日の全回ぶん（実施順）。実施がなければ空配列
+  getSessions(date) {
+    const e = this.load().history[date];
+    return (e && e.sessions) || [];
+  },
+  getTodaySessions() { return this.getSessions(this.today()); },
+  // 今日すでに出題した問題のkey集合
+  //  （同日の重複出題の除外と、間隔反復を1日1回だけ反映する判定に使う・§4.1.7）
+  getAskedKeysToday() {
+    const keys = new Set();
+    this.getTodaySessions().forEach(s => s.questions.forEach(q => keys.add(q.key)));
+    return keys;
+  },
+  // 直近n回ぶん（新しい順。日付の新しい順→同日内は回の新しい順）
+  getRecentSessions(n) {
+    const h = this.load().history;
+    const list = [];
+    for (const date of Object.keys(h).sort().reverse()) {
+      const sessions = h[date].sessions || [];
+      for (let i = sessions.length - 1; i >= 0; i--) {
+        list.push({ date, index: i, count: sessions.length, session: sessions[i] });
+        if (list.length >= n) return list;
+      }
+    }
+    return list;
   },
   // ── 間隔反復（スペースド・リピティション、v2.10 §4.3.2）──
   //  ステージ0〜7＝翌日/3日後/5日後/1週間後/10日後/15日後/20日後/30日後
@@ -920,16 +949,20 @@ const Store = {
     const now = Date.now();
     for (let i = 0; i < 7; i++) {
       const dt = formatLocalDate(new Date(now - i * 86400000));
-      const s = d.history[dt];
-      if (s) { total += s.questions.length; correct += s.score; }
+      // 1日に複数回ある場合は全回ぶん合算する
+      ((d.history[dt] || {}).sessions || []).forEach(s => {
+        total += s.questions.length;
+        correct += s.score;
+      });
     }
     return { total, correct };
   },
 
   // ── バッジ算出用の集計（すべてアクティブなプロフィールの履歴から計算）──
-  // テストを実施した「日数」の累計
+  // テストを実施した「回数」の累計（全日の全セッション数。1日に複数回やればその回数ぶん数える）
   getSessionCount() {
-    return Object.keys(this.load().history).length;
+    return Object.values(this.load().history)
+      .reduce((n, e) => n + ((e.sessions || []).length), 0);
   },
   // 週3回以上できた「週」の数（週は月曜はじまり）
   getConsistentWeekCount() {
@@ -953,16 +986,38 @@ const Store = {
   getGradesExperienced() {
     const hist = this.load().history;
     const grades = new Set();
-    Object.values(hist).forEach(sess => {
+    Object.values(hist).forEach(e => (e.sessions || []).forEach(sess => {
       const cnt = {};
       (sess.questions || []).forEach(q => { if (q.grade) cnt[q.grade] = (cnt[q.grade] || 0) + 1; });
       let main = null, max = -1;
       Object.entries(cnt).forEach(([g, c]) => { if (c > max) { max = c; main = g; } });
       if (main) grades.add(main);
-    });
+    }));
     return grades.size;
   }
 };
+
+// 旧形式 history[日付]={questions,answers,score} を、1日の全回数ぶんを持つ
+// history[日付]={sessions:[{questions,answers,score}, …]} に変換する（v2.13・§4.1.7）。
+// 旧データは「1回ぶん」として扱い、消さない。
+function normalizeHistory(profile) {
+  const h = profile.history;
+  if (!h) return;
+  Object.keys(h).forEach(date => {
+    const e = h[date];
+    if (e && Array.isArray(e.sessions)) return;           // 変換済み
+    if (e && Array.isArray(e.questions)) {                // 旧形式
+      const answers = e.answers || [];
+      h[date] = { sessions: [{
+        questions: e.questions,
+        answers,
+        score: e.score != null ? e.score : answers.filter(Boolean).length
+      }] };
+    } else {
+      delete h[date];                                      // 壊れたエントリは捨てる
+    }
+  });
+}
 
 // Dateオブジェクトを、ローカルの年月日で"YYYY-MM-DD"文字列にする
 //  ※Date.toISOString()はUTCに変換してしまうため使わない（JST等UTC+の環境で日付が1日ずれる）。
@@ -1065,7 +1120,9 @@ const Quiz = {
     const total = Store.getQCount();
     const plan = this.slotPlan(grade, total);
     const all = this.getAll();
-    const usedKeys = new Set();
+    // 同じ日の2回目以降は、今日すでに出題した問題を除く（候補が足りない場合のみ末尾で再出題を許可・§4.1.7）
+    const askedToday = Store.getAskedKeysToday();
+    const usedKeys = new Set(askedToday);
 
     // 正解率の低い順・未出題優先で、指定学年プールから補充するヘルパ
     const fillFrom = (gradeVal, slots, target) => {
@@ -1112,6 +1169,11 @@ const Quiz = {
     if (result.length < total) {
       fillFrom(plan.main, result, total);
     }
+    // 候補が足りない場合に限り、今日出題済みの問題の再出題を許可する
+    if (result.length < total && askedToday.size) {
+      askedToday.forEach(k => usedKeys.delete(k));
+      fillFrom(plan.main, result, total);
+    }
     return this.applyOrder(result.slice(0, total));
   },
 
@@ -1156,7 +1218,9 @@ const Quiz = {
   //  ①「習った」かつ間隔反復（§4.3.2）で対象日を迎えた漢字を最優先（§4.3.1: 30%まで） ②残りは正解率低・未出題を優先
   selectReview() {
     const total = Store.getQCount();
-    const usedKeys = new Set();
+    // 同じ日の2回目以降は、今日すでに出題した問題を除く（候補が足りない場合のみ末尾で再出題を許可・§4.1.7）
+    const askedToday = Store.getAskedKeysToday();
+    const usedKeys = new Set(askedToday);
     const result = [];
 
     // ① 間隔反復で対象日を迎えた問題を優先
@@ -1168,21 +1232,30 @@ const Quiz = {
 
     // ② 残りを、復習可能な漢字プールから正解率低・未出題優先で補充
     //   未出題(1000)にも乱数を加え、配列順（低学年固定）に偏らないようにする
-    const pool = [];
-    this.getAll().forEach(p => {
-      if (usedKeys.has(p.key)) return;
-      const cand = this.getReviewCandidate(p);
-      if (cand) {
-        const s = Store.getStats(p.key);
-        const base = s.tested === 0 ? 1000 : (1 - s.correct / s.tested) * 100;
-        pool.push({ ...cand, priority: base + Math.random() * 30 });
+    const fillFromPool = () => {
+      const pool = [];
+      this.getAll().forEach(p => {
+        if (usedKeys.has(p.key)) return;
+        const cand = this.getReviewCandidate(p);
+        if (cand) {
+          const s = Store.getStats(p.key);
+          const base = s.tested === 0 ? 1000 : (1 - s.correct / s.tested) * 100;
+          pool.push({ ...cand, priority: base + Math.random() * 30 });
+        }
+      });
+      pool.sort((a, b) => b.priority - a.priority);
+      for (const p of pool) {
+        if (result.length >= total) break;
+        if (usedKeys.has(p.key)) continue;
+        result.push(p); usedKeys.add(p.key);
       }
-    });
-    pool.sort((a, b) => b.priority - a.priority);
-    for (const p of pool) {
-      if (result.length >= total) break;
-      if (usedKeys.has(p.key)) continue;
-      result.push(p); usedKeys.add(p.key);
+    };
+    fillFromPool();
+
+    // 候補が足りない場合に限り、今日出題済みの問題の再出題を許可する
+    if (result.length < total && askedToday.size) {
+      askedToday.forEach(k => usedKeys.delete(k));
+      fillFromPool();
     }
 
     return this.applyOrder(result.slice(0, total));
@@ -1321,10 +1394,7 @@ const App = {
       this.navigate('learned');
       return;
     }
-    const sess = Store.getTodaySession();
-    if (sess) {
-      if (!confirm('今日はすでにテストをやりました。もう一度やりますか？')) return;
-    }
+    // 1日に何回でも実施できる（v2.13・§4.1.7）ため、実施済みの日の確認ダイアログは出さない
     this.questions = Quiz.selectDaily();
     if (!this.questions.length) {
       alert('出題できる漢字が見つかりませんでした。設定を確認してね。');
@@ -1410,12 +1480,15 @@ const App = {
 
   finishQuiz() {
     if (this.answers.some(a => a === null)) return;
+    // 間隔反復（§4.3.2）は、同じ漢字について1日につき最初の1回の結果だけ反映する（§4.1.7）。
+    // 保存前の「今日すでに出題した問題」で判定するので、saveSessionより前に取得する。
+    const askedToday = Store.getAskedKeysToday();
     this.questions.forEach((q, i) => {
       Store.recordAnswer(q.key, this.answers[i]);
-      Store.recordSrsResult(q.key, this.answers[i]);
+      if (!askedToday.has(q.key)) Store.recordSrsResult(q.key, this.answers[i]);
     });
     this.lastSessionDate = Store.today();
-    Store.saveSession(this.lastSessionDate, this.questions, this.answers);
+    this.lastSessionIndex = Store.saveSession(this.lastSessionDate, this.questions, this.answers);
     this.renderResult();
     this.navigate('result');
     window.scrollTo(0, 0);
@@ -1447,9 +1520,12 @@ const App = {
           </div>
         </li>
       `).join('');
+    } else {
+      // 1日に何回も実施するので、前の回の「まちがえた問題」が残らないよう隠す
+      document.getElementById('wrong-card').style.display = 'none';
     }
     document.getElementById('nav-result') && document.getElementById('nav-result').classList.add('active');
-    document.getElementById('btn-review-result').onclick = () => this.openReview(this.lastSessionDate, 'home');
+    document.getElementById('btn-review-result').onclick = () => this.openReview(this.lastSessionDate, this.lastSessionIndex, 'home');
   },
 
   // プロフィール切り替え・学年選択タブを描画
@@ -1594,37 +1670,40 @@ const App = {
     document.getElementById('stat-rate').textContent = ws.total ? Math.round(ws.correct / ws.total * 100) + '%' : '-';
 
     this.renderBadges();
-    const d = Store.load();
 
-    const sess = Store.getTodaySession();
+    // 何回でも実施できる（§4.1.7）。実施済みの日も開始ボタンを出し、実施回数をバナーで見せる
+    const todaySessions = Store.getTodaySessions();
     const statusEl = document.getElementById('today-status');
-    if (sess) {
-      statusEl.innerHTML = `
+    let banner = '';
+    let startLabel = `📝 今日の${Store.getQCount()}問をはじめる`;
+    if (todaySessions.length) {
+      const last = todaySessions[todaySessions.length - 1];
+      banner = `
         <div class="today-done-banner">
-          <div class="big">✅ ${sess.score}/${sess.questions.length}</div>
-          <p>今日のテストはおわっています！<br>また明日！</p>
+          <div class="big">✅ 今日 ${todaySessions.length}回 完了</div>
+          <p>直近 ${last.score}/${last.questions.length}</p>
         </div>
       `;
-    } else {
-      statusEl.innerHTML = `
-        <button class="btn btn-success" onclick="App.startQuiz()" style="margin-bottom:14px">
-          📝 今日の${Store.getQCount()}問をはじめる
-        </button>
-      `;
+      startLabel = '📝 もう1回やる';
     }
+    statusEl.innerHTML = `${banner}
+      <button class="btn btn-success" onclick="App.startQuiz()" style="margin-bottom:14px">
+        ${startLabel}
+      </button>
+    `;
 
-    // 直近2回分のテスト見返しカード
-    const recentDates = Object.keys(d.history).sort().reverse().slice(0, 2);
+    // 直近2回ぶんのテスト見返しカード（回単位。同じ日に複数回ある日は「N回目」を併記）
+    const recent = Store.getRecentSessions(2);
     const reviewCard = document.getElementById('review-card');
-    if (recentDates.length === 0) {
+    if (recent.length === 0) {
       reviewCard.style.display = 'none';
     } else {
       reviewCard.style.display = '';
-      document.getElementById('review-recent-list').innerHTML = recentDates.map(dt => {
-        const s = d.history[dt];
-        return `<button class="review-item-btn" onclick="App.openReview('${dt}','home')">
-          <span class="review-item-date">${dt}</span>
-          <span class="review-item-score">${s.score}/${s.questions.length}問正解</span>
+      document.getElementById('review-recent-list').innerHTML = recent.map(r => {
+        const nth = r.count > 1 ? ` ${r.index + 1}回目` : '';
+        return `<button class="review-item-btn" onclick="App.openReview('${r.date}',${r.index},'home')">
+          <span class="review-item-date">${r.date}${nth}</span>
+          <span class="review-item-score">${r.session.score}/${r.session.questions.length}問正解</span>
         </button>`;
       }).join('');
     }
@@ -1692,7 +1771,6 @@ const App = {
     const now = new Date();
     if (!this.calView) this.calView = { y: now.getFullYear(), m: now.getMonth() };
     const { y, m } = this.calView;
-    const d = Store.load();
 
     document.getElementById('cal-profile-badge').textContent = `👦 ${Store.getName()}の記録`;
     document.getElementById('cal-label').textContent = `${y}年${m + 1}月`;
@@ -1706,13 +1784,14 @@ const App = {
     for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell empty"></div>`;
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const sess = d.history[dateStr];
+      // ✅は1日につき1つ（その日に1回以上実施していれば付く）
+      const done = Store.getSessions(dateStr).length > 0;
       const cls = ['cal-cell'];
-      if (sess) cls.push('cal-done');
+      if (done) cls.push('cal-done');
       if (dateStr === todayStr) cls.push('cal-today');
       cells += `<div class="${cls.join(' ')}" onclick="App.showCalDay('${dateStr}')">
         <span class="cal-day">${day}</span>
-        ${sess ? '<span class="cal-check">✅</span>' : ''}
+        ${done ? '<span class="cal-check">✅</span>' : ''}
       </div>`;
     }
     document.getElementById('cal-grid').innerHTML = cells;
@@ -1728,18 +1807,34 @@ const App = {
   },
 
   showCalDay(dateStr) {
-    const d = Store.load();
-    const sess = d.history[dateStr];
+    const sessions = Store.getSessions(dateStr);
     const box = document.getElementById('cal-detail');
-    if (!sess) {
+    if (!sessions.length) {
       box.innerHTML = `<div class="cal-detail-box"><div class="cal-detail-date">${dateStr}</div>この日は学習していません</div>`;
       return;
     }
+    if (sessions.length === 1) {
+      const s = sessions[0];
+      box.innerHTML = `
+        <div class="cal-detail-box">
+          <div class="cal-detail-date">${dateStr}</div>
+          <div class="cal-detail-score">${s.score} / ${s.questions.length} 問正解</div>
+          <button class="btn btn-outline" style="margin-top:10px" onclick="App.openReview('${dateStr}',0,'calendar')">📖 この日の問題を見返す</button>
+        </div>
+      `;
+      return;
+    }
+    // 1日に複数回実施した日は、回ごとの一覧と「見返す」ボタンを出す（§4.1.7）
+    const rows = sessions.map((s, i) => `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px">
+        <div class="cal-detail-score" style="margin:0">${i + 1}回目　${s.score} / ${s.questions.length} 問正解</div>
+        <button class="btn btn-outline" style="width:auto;padding:8px 14px" onclick="App.openReview('${dateStr}',${i},'calendar')">📖 見返す</button>
+      </div>
+    `).join('');
     box.innerHTML = `
       <div class="cal-detail-box">
-        <div class="cal-detail-date">${dateStr}</div>
-        <div class="cal-detail-score">${sess.score} / ${sess.questions.length} 問正解</div>
-        <button class="btn btn-outline" style="margin-top:10px" onclick="App.openReview('${dateStr}','calendar')">📖 この日の問題を見返す</button>
+        <div class="cal-detail-date">${dateStr}（${sessions.length}回）</div>
+        ${rows}
       </div>
     `;
   },
@@ -1747,15 +1842,16 @@ const App = {
   // ── テストの見返し ──
   reviewReturnTo: 'home',
 
-  openReview(dateStr, fromScreen) {
+  // dateStr＋index（その日の何回目か・0始まり）で見返す回を指定する
+  openReview(dateStr, index, fromScreen) {
     this.reviewReturnTo = fromScreen || 'home';
-    this.renderReview(dateStr);
+    this.renderReview(dateStr, index);
     this.navigate('review');
   },
 
-  renderReview(dateStr) {
-    const d = Store.load();
-    const sess = d.history[dateStr];
+  renderReview(dateStr, index) {
+    const sessions = Store.getSessions(dateStr);
+    const sess = sessions[index];
     document.getElementById('review-profile-badge').textContent = `👦 ${Store.getName()}の記録`;
     document.getElementById('btn-review-back').onclick = () => this.navigate(this.reviewReturnTo);
 
@@ -1765,7 +1861,9 @@ const App = {
       document.getElementById('review-list').innerHTML = '<div class="empty-state">この日の記録はありません</div>';
       return;
     }
-    document.getElementById('review-date').textContent = `${dateStr} のテスト`;
+    // 同じ日に複数回ある日だけ「（N回目）」を併記する
+    const nth = sessions.length > 1 ? `（${index + 1}回目）` : '';
+    document.getElementById('review-date').textContent = `${dateStr} のテスト${nth}`;
     document.getElementById('review-score').textContent = `${sess.score} / ${sess.questions.length} 問正解`;
 
     document.getElementById('review-list').innerHTML = sess.questions.map((q, i) => {
